@@ -77,6 +77,34 @@ static int hex_dump_chunk(FILE * in, int chunk_len)
     return 0;
 }
 
+static int parse_movi(FILE * in, int chunk_len)
+{
+    long offset = ftell(in);
+    char chunk_id[5] = {0};
+    int chunk_size;
+
+    printf("      MOVI\n");
+    printf("      -------------------------------\n");
+    printf("      Offset=       ckid    dwChunkLength\n");
+
+    while (chunk_len >= 8) {
+        read_chars(in, chunk_id, 4);
+        chunk_size = read_long(in);
+
+        // align a chunk size by 2 bytes
+        chunk_size = chunk_size + (chunk_size % 2);
+
+        printf("      0x%08lx    %s   0x%08x\n", offset, chunk_id, chunk_size);
+
+        chunk_len -= (8 + chunk_size);
+        offset += (8 + chunk_size);
+
+        fseek(in, chunk_size, SEEK_CUR);
+    }
+
+    return 0;
+}
+
 static int parse_idx1(FILE * in, int chunk_len)
 {
     struct index_entry_t index_entry;
@@ -84,7 +112,7 @@ static int parse_idx1(FILE * in, int chunk_len)
 
     printf("      IDX1\n");
     printf("      -------------------------------\n");
-    printf("      ckid   dwFlags         dwChunkOffset        dwChunkLength\n");
+    printf("      ckid   dwFlags         dwChunkOffset        dwChunkLength   KeyFrame\n");
 
     for (t = 0; t < chunk_len / 16; t++) {
         read_chars(in, index_entry.ckid, 4);
@@ -92,9 +120,10 @@ static int parse_idx1(FILE * in, int chunk_len)
         index_entry.dwChunkOffset = read_long(in);
         index_entry.dwChunkLength = read_long(in);
 
-        printf("      %s   0x%08x      0x%08x           0x%08x\n",
+        printf("      %s   0x%08x      0x%08x           0x%08x      %c\n",
                index_entry.ckid,
-               index_entry.dwFlags, index_entry.dwChunkOffset, index_entry.dwChunkLength);
+               index_entry.dwFlags, index_entry.dwChunkOffset, index_entry.dwChunkLength,
+               (index_entry.dwFlags & 0x10) ? '*' : ' ');
     }
 
     printf("\n");
@@ -276,7 +305,7 @@ static int parse_hdrl_list(FILE * in, struct avi_header_t *avi_header,
     int end_of_chunk;
     int next_chunk;
     long offset = ftell(in);
-    int stream_type = 0;        // 0=video 1=sound
+    int stream_type = 0;        // 0=video 1=sound 2=text
 
     read_chars(in, chunk_id, 4);
     chunk_size = read_long(in);
@@ -324,6 +353,9 @@ static int parse_hdrl_list(FILE * in, struct avi_header_t *avi_header,
             } else if (strcmp(buffer, "auds") == 0) {
                 stream_type = 1;
                 read_stream_header(in, &stream_header_auds);
+            } else if (strcmp(buffer, "txts") == 0) {
+                stream_type = 2;
+                read_stream_header(in, stream_header);
             } else {
                 printf("Unknown stream type %s\n", buffer);
                 return -1;
@@ -331,11 +363,13 @@ static int parse_hdrl_list(FILE * in, struct avi_header_t *avi_header,
         } else if (strcasecmp("strf", chunk_type) == 0) {
             if (stream_type == 0) {
                 read_stream_format(in, stream_format);
-            } else {
+            } else if (stream_type == 1) {
                 read_stream_format_auds(in, &stream_format_auds);
+            } else {
+                hex_dump_chunk(in, chunk_size);
             }
         } else if (strcasecmp("strd", chunk_type) == 0) {
-
+            // do nothing
         } else {
             printf("            Unknown chunk type: %s\n", chunk_type);
             // skip_chunk(in);
@@ -447,7 +481,7 @@ static int parse_riff(FILE * in)
             parse_hdrl(in, &avi_header, &stream_header, &stream_format, chunk_size);
             /* skip_chunk(in); */
         } else if (strcasecmp("movi", chunk_type) == 0) {
-            // parse_movi(in);
+            parse_movi(in, chunk_size);
         } else if (strcasecmp("idx1", chunk_id) == 0) {
             fseek(in, ftell(in) - 4, SEEK_SET);
             parse_idx1(in, chunk_size);
@@ -475,7 +509,7 @@ int main(int argc, char *argv[])
 {
     FILE *in;
 
-    printf("\nreadavi - Copyright 2004-2011 Michael Kohn (http://www.mikekohn.net)\nVersion: March 11, 2010\n\n");
+    printf("readavi - Copyright 2004-2013 Michael Kohn (http://www.mikekohn.net)\nVersion: March 22, 2013\nModified by jaeguly@gmail.com) (July   10, 2015)\n\n");
 
     if (argc != 2) {
         printf("Usage: readavi <filename>\n\n");
@@ -487,6 +521,8 @@ int main(int argc, char *argv[])
         printf("Could not open %s for input\n", argv[1]);
         exit(1);
     }
+
+    printf("# filename: %s\n\n", argv[1]);
 
     parse_riff(in);
 
